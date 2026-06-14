@@ -218,5 +218,33 @@ FIRMWARE_CHANGES.md` 自承無 RISC-V 工具鏈、未 rebuild）。沒韌體 ROM
   score=0x67(103)、sw=01 class=000(N)+valid 亮、sw=10 valid=1/busy=0、sw=11 心跳正常。
   **EPU 端到端在 Nexys Video 上跑通，輸出與 VCS golden 逐位元相符。** done 為脈衝（穩態
   看不到屬正常，靠 result_valid 鎖存）。
-- **Phase B（下一步選項）**：補 RISC-V 工具鏈/請組員給 rom*.hex → 整顆 CHIP（CPU 自動
-  驅動 EPU、result 出腳）。或強化 Phase A demo：多筆樣本/不同類別、加 UART 串流結果。
+**git 版控（2026-06-14）**：`D:\AOC-final` 已 `git init`，known-good 基準 commit `4ed14f7`，
+推到 GitHub `https://github.com/changerYu/AOC_FPGA`（branch `main`）。`.gitignore` 擋掉
+`aoc-vcs-version/`(482MB 外部源碼)、`build/`、`.claude/`、PDF。能跑的 bit 永久保留於
+`epu_fpga/release/epu_top_v1.bit`。**往後在分支實驗，main 維持 known-good。**
+
+**目標架構（使用者 2026-06-14 定的最終方向，強化 demo 暫緩）**：完整即時系統 ——
+`PC →(USB/WiFi) ESP32 → UART → [FPGA UART RX] → Buffer Slave(BRAM)`，**按鈕觸發**後
+`CPU →AXI/DMA→ EPU GLB → 分類 → result`。ROM 只放韌體（in.dat 不再進 ROM，改執行期
+經 UART 進 buffer）。對應現有積木：buffer slave ≈ 現成 `AXI_BRAM_Buffer_wrapper.sv`；
+CPU/AXI/DMA/EPU 都在；**唯一要新寫的是 UART RX→buffer**（呼應原里程碑4 UART）。
+- 設計決策（待定）：UART 進 buffer 建議走**雙埠 BRAM**（UART 寫一埠、CPU 經 AXI 讀另一埠，
+  UART 不必懂 AXI）；UART 框架需「整筆 544 字=2176B 到齊」判斷；ESP32 非必要（板上
+  FT2232 USB-UART 可直接用，ESP32 只在要無線/感測前端時才加）；結果可同條 UART 加 TX 回傳。
+- **建議分階段**（每步可獨立上板）：
+  - **B0（前提）**：整顆 CHIP 先在 FPGA build 起來 → 需 rom*.hex 韌體（缺 RISC-V 工具鏈，
+    請組員 Docker `make` 給 hex，或本機裝 toolchain）。
+  - **B1（可先做、免韌體）**：獨立 EPU 上加 UART RX→寫 GLB→按鈕啟動，把 V1 的靜態
+    `$readmemh` 換成「UART 即時餵 + 按鈕跑」，先驗證整條 UART→EPU 資料路。
+  - **B2**：接上 buffer slave + CPU/DMA，組成完整流程。
+- **進度（2026-06-14）**：**B1 已選定並 build 通過，待硬體驗證。** 分支 `feature/uart-epu`。
+  新增（`epu_fpga/`）：`rtl/uart_rx.sv`（8N1@115200）、`rtl/epu_uart_top.sv`（框架解析
+  AA55+2176B payload+XOR → loader 經 EPU System 埠寫 GLB 0..543 → BTNC 啟動）、
+  `constraints/epu_uart_nexys_video.xdc`（UART RX=JA1/AB22、TX=JA7/Y21、rst=BTND、
+  start=BTNC）、`build_epu_uart.tcl` → `build/epu_uart_top.bit`（0 err/0 crit、時序達標）。
+  ESP32（`ESP32_Arduino_UART/esp32_epu_uart/`）：`.ino` 用框架送寫死 golden 樣本 +
+  `golden_sample.h`（544 字，由 `gen_golden_sample.py` 從 glb_init.hex 產）。
+  接線：ESP32 GPIO17→JA1(AB22)、GPIO16→JA7(Y21)、GND→JA pin5/11。權重維持烤死，
+  只有輸入經 UART 進來；不送 UART 直接按 BTNC 會跑烤進去的 golden（等同 V1 sanity）。
+  驗收：UART 送幀→按 BTNC→sw=00 LED=0x67、sw=01 class=000+valid；sw=10 LED4=data_ready
+  /LED5=uart_err。**待使用者接線+燒錄回報**。
