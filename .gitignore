@@ -1,0 +1,35 @@
+# ---- 建置輸出與 Vivado 暫存（皆可由 build.tcl 重建，不進版控）----
+build/
+
+# Vivado 工作目錄/暫存
+*.jou
+*.log
+*.str
+.Xil/
+vivado*.backup.*
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.srcs/
+*.gen/
+
+# 編輯器/作業系統雜項
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# 組員外部源碼（482 MB、另一個 repo；請另行取得其 FPGA branch，勿進本版控）
+aoc-vcs-version/
+AOC-vcs-version/
+
+# 本機 Claude Code 狀態
+.claude/
+
+# 板卡參考手冊（可從 Digilent 下載，不進版控以保持 repo 精簡）
+nexys-video_rm.pdf
+
+# 注意：epu_fpga/build/ 已被上面的 build/ 規則擋掉；known-good bitstream 另存於
+# epu_fpga/release/ 並以 git add -f 強制納入版控。
