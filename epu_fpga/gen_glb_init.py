@@ -10,8 +10,17 @@
 #   __weight_glb_word_base = 1024    <- weight.dat (decoder.sv BASE_POS_EMBED=1024)
 #
 # in.dat / weight.dat are text, one 32-bit hex word per line (see txt2bin.py).
-# Output: glb_init.hex, 32768 lines of 8-hex-digit words, for $readmemh.
+#
+# Usage:
+#   python gen_glb_init.py                       -> glb_init.hex (input + weights)
+#   python gen_glb_init.py --zero-input \
+#          --out glb_init_zeroinput.hex          -> weights only, input region 0
+#
+# The --zero-input image is a diagnostic: a board built with it produces a
+# NON-golden result with no UART, and the golden result only when the real input
+# is streamed in over UART -> airtight proof the result comes from UART.
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -23,7 +32,6 @@ HERE = Path(__file__).resolve().parent
 SIM_FPGA = HERE.parent / "AOC-vcs-version" / "hardware" / "sim" / "fpga"
 IN_DAT     = SIM_FPGA / "in.dat"
 WEIGHT_DAT = SIM_FPGA / "weight.dat"
-OUT_HEX    = HERE / "glb_init.hex"
 
 
 def load_words(path):
@@ -48,22 +56,31 @@ def place(mem, base, words, name):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="glb_init.hex", help="output hex filename")
+    ap.add_argument("--zero-input", action="store_true",
+                    help="leave the input region (words 0..543) zero; weights only")
+    args = ap.parse_args()
+
     inp = load_words(IN_DAT)
     wgt = load_words(WEIGHT_DAT)
 
     mem = [0] * GLB_WORDS
-    i0, i1 = place(mem, INPUT_WORD_BASE, inp, "input")
-    w0, w1 = place(mem, WEIGHT_WORD_BASE, wgt, "weight")
+    if args.zero_input:
+        i0 = i1 = 0
+        print("input : ZEROED (diagnostic: real input must arrive via UART)")
+    else:
+        i0, i1 = place(mem, INPUT_WORD_BASE, inp, "input")
+        print(f"input : {len(inp):5d} words -> GLB[{i0}..{i1-1}]")
 
+    w0, w1 = place(mem, WEIGHT_WORD_BASE, wgt, "weight")
     if i1 > w0:
         sys.exit(f"input [{i0},{i1}) overlaps weight base {w0}")
 
-    OUT_HEX.write_text("".join(f"{w:08X}\n" for w in mem))
-
-    print(f"input : {len(inp):5d} words -> GLB[{i0}..{i1-1}]")
+    out_path = HERE / args.out
+    out_path.write_text("".join(f"{w:08X}\n" for w in mem))
     print(f"weight: {len(wgt):5d} words -> GLB[{w0}..{w1-1}]")
-    print(f"zeros : gap GLB[{i1}..{w0-1}] and tail GLB[{w1}..{GLB_WORDS-1}]")
-    print(f"wrote {OUT_HEX} ({GLB_WORDS} words)")
+    print(f"wrote {out_path} ({GLB_WORDS} words)")
 
 
 if __name__ == "__main__":
