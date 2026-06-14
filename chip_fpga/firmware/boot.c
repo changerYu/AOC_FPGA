@@ -72,20 +72,18 @@ void boot() {
     DESC_1->next = DESC_2_ADDR;
     DESC_1->eoc  = 0;
 
-    // ROM -> DATA
+    // ROM -> DATA  (chains straight to weight; the buffer is NOT loaded here)
     DESC_2->src  = (uint32_t)&__data_paddr_start;
     DESC_2->dst  = (uint32_t)&__data_start;
     DESC_2->len  = (uint32_t)&__data_end - (uint32_t)&__data_start;
-    DESC_2->next = DESC_3_ADDR;
+    DESC_2->next = DESC_4_ADDR;
     DESC_2->eoc  = 0;
 
-    // ROM -> FPGA buffer (S5 @ 0x20000000), staging the input there instead of
-    // straight into GLB. main.c will move it buffer -> GLB before each EPU run.
-    DESC_3->src  = (uint32_t)&__input_load_start;
-    DESC_3->dst  = FPGA_BUFFER_BASE;
-    DESC_3->len  = (uint32_t)&__input_size_bytes;
-    DESC_3->next = DESC_4_ADDR;
-    DESC_3->eoc  = 0;
+    // M1b: the ECG input is NO LONGER staged into the buffer by boot. The buffer
+    // (S5) BRAM is pre-initialized from buf_init.hex (SRAM_wrapper_buf) and, in
+    // M1c, written by the UART loader. Either way its contents survive a CPU
+    // reset (BRAM is not cleared by reset), so "reset = re-classify the current
+    // buffer". main.c DMAs buffer -> GLB before each EPU run.
 
     // ROM -> GLB weight/param region
     // GLB dst = 0x00030000 + 1024 * 4 = 0x00031000

@@ -45,6 +45,8 @@ while {[gets $fh line] >= 0} {
     if {[string match "*.svh" $abs]} { continue }
     # Skip the original ROM_wrapper -- replaced by the absolute-path overlay.
     if {[string match "*/ROM_wrapper.sv" $abs]} { continue }
+    # Skip the original buffer wrapper -- replaced by the $readmemh overlay (M1b).
+    if {[string match "*/AXI_BRAM_Buffer_wrapper.sv" $abs]} { continue }
     lappend rtl $abs
 }
 close $fh
@@ -52,17 +54,20 @@ close $fh
 puts "==== build_chip: adding [llength $rtl] RTL files from filelist ===="
 add_files -fileset sources_1 $rtl
 
-# ---- Board wrapper + ROM overlay (absolute-path $readmemh) -------------------
+# ---- Board wrapper + ROM/buffer overlays ($readmemh) ------------------------
 add_files -fileset sources_1 [list \
     $proj_dir/rtl/ROM_wrapper.sv \
+    $proj_dir/rtl/SRAM_wrapper_buf.sv \
+    $proj_dir/rtl/AXI_BRAM_Buffer_wrapper.sv \
     $proj_dir/rtl/chip_top.sv ]
 
-# ---- ROM init images (so $readmemh absolute paths have the files present) ----
+# ---- ROM + buffer init images (so $readmemh absolute paths resolve) ---------
 add_files -fileset sources_1 [list \
     $proj_dir/rom0.hex \
     $proj_dir/rom1.hex \
     $proj_dir/rom2.hex \
-    $proj_dir/rom3.hex ]
+    $proj_dir/rom3.hex \
+    $proj_dir/buf_init.hex ]
 
 # ---- Headers as global includes so `define macros are visible everywhere -----
 # define.svh is `ifndef-guarded; AXI_define.svh is not (benign "redefined"
