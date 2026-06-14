@@ -47,6 +47,9 @@ while {[gets $fh line] >= 0} {
     if {[string match "*/ROM_wrapper.sv" $abs]} { continue }
     # Skip the original buffer wrapper -- replaced by the $readmemh overlay (M1b).
     if {[string match "*/AXI_BRAM_Buffer_wrapper.sv" $abs]} { continue }
+    # Skip the original top.sv / CHIP.v -- replaced by M1c overlays (UART plumbing).
+    if {[string match "*/top.sv" $abs]}  { continue }
+    if {[string match "*/CHIP.v" $abs]}  { continue }
     lappend rtl $abs
 }
 close $fh
@@ -54,11 +57,15 @@ close $fh
 puts "==== build_chip: adding [llength $rtl] RTL files from filelist ===="
 add_files -fileset sources_1 $rtl
 
-# ---- Board wrapper + ROM/buffer overlays ($readmemh) ------------------------
+# ---- Board wrapper + ROM/buffer overlays + M1c UART/CHIP/top overlays --------
 add_files -fileset sources_1 [list \
     $proj_dir/rtl/ROM_wrapper.sv \
     $proj_dir/rtl/SRAM_wrapper_buf.sv \
     $proj_dir/rtl/AXI_BRAM_Buffer_wrapper.sv \
+    $proj_dir/rtl/uart_rx.sv \
+    $proj_dir/rtl/uart_buffer_loader.sv \
+    $proj_dir/rtl/top.sv \
+    $proj_dir/rtl/CHIP.v \
     $proj_dir/rtl/chip_top.sv ]
 
 # ---- ROM + buffer init images (so $readmemh absolute paths resolve) ---------

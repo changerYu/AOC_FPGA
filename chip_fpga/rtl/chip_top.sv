@@ -43,8 +43,9 @@
 
 module chip_top (
     input  wire        clk100,    // 100 MHz system clock (pin R4)
-    input  wire        rst_btn,   // active-high reset button (BTNC)
+    input  wire        rst_btn,   // active-high reset button (BTNC) = trigger+reset
     input  wire [1:0]  sw,        // LED display select
+    input  wire        uart_rxd,  // M1c: UART in (JA1/AB22) <- ESP32 GPIO17
     output wire [7:0]  led
 );
 
@@ -160,6 +161,7 @@ module chip_top (
     wire        result_valid;
     wire [2:0]  result_class;
     wire [7:0]  result_score;
+    wire        data_ready, uart_err, rx_seen;   // from UART loader (clk50 domain)
 
     CHIP u_chip (
         .cpu_clk      (clk100_g),
@@ -170,10 +172,26 @@ module chip_top (
         .axi_rst      (axi_rst),
         .rom_rst      (rom_rst),
         .dram_rst     (dram_rst),
+        .uart_rxd     (uart_rxd),
+        .data_ready   (data_ready),
+        .uart_err     (uart_err),
+        .rx_seen      (rx_seen),
         .result_valid (result_valid),
         .result_class (result_class),
         .result_score (result_score)
     );
+
+    // UART status lives in the clk50 buffer domain; double-flop into clk100 for
+    // the LED view (slow/steady levels -> simple 2FF sync is sufficient).
+    reg [1:0] dr_sync = 2'b00, ue_sync = 2'b00, rs_sync = 2'b00;
+    always @(posedge clk100_g) begin
+        dr_sync <= {dr_sync[0], data_ready};
+        ue_sync <= {ue_sync[0], uart_err};
+        rs_sync <= {rs_sync[0], rx_seen};
+    end
+    wire data_ready_s = dr_sync[1];
+    wire uart_err_s   = ue_sync[1];
+    wire rx_seen_s    = rs_sync[1];
 
     // ---------------------------------------------------------------------
     // Latch the result on the first rising edge of result_valid (cpu domain).
@@ -205,7 +223,11 @@ module chip_top (
         case (sw)
             2'b00:   led_r = score_lat;
             2'b01:   led_r = {valid_lat, 4'b0000, class_lat};
-            2'b10:   led_r = {5'b00000, locked, rst_done, valid_lat};
+            // M1c UART/status view:
+            //   LED7=rx_seen LED6=uart_err LED5=data_ready
+            //   LED2=locked  LED1=rst_done LED0=valid
+            2'b10:   led_r = {rx_seen_s, uart_err_s, data_ready_s, 2'b00,
+                              locked, rst_done, valid_lat};
             default: led_r = hb[25:18];
         endcase
     end

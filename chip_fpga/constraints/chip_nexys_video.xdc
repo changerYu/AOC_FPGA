@@ -22,8 +22,13 @@ set_clock_groups -asynchronous \
     -group [get_clocks -of_objects [get_pins u_mmcm/CLKOUT0]] \
     -group [get_clocks -of_objects [get_pins u_mmcm/CLKOUT1]]
 
-# ---- Reset: center pushbutton BTNC (active-high when pressed) ---------------
+# ---- Reset / trigger: center pushbutton BTNC (active-high when pressed) -----
+# In M1c this both resets the SoC and triggers a fresh classification of the
+# current buffer contents (UART-loaded). Press it after sending a UART frame.
 set_property -dict { PACKAGE_PIN B22 IOSTANDARD LVCMOS12 } [get_ports { rst_btn }]
+
+# ---- M1c: UART RX from ESP32/PC -- JA1 = AB22 (Pmod JA pin 1), 3.3V ---------
+set_property -dict { PACKAGE_PIN AB22 IOSTANDARD LVCMOS33 } [get_ports { uart_rxd }]
 
 # ---- Display-select slide switches sw[1:0] (LVCMOS12) -----------------------
 set_property -dict { PACKAGE_PIN E22 IOSTANDARD LVCMOS12 } [get_ports { sw[0] }]

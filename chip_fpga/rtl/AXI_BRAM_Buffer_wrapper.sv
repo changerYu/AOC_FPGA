@@ -47,8 +47,31 @@ module AXI_BRAM_Buffer_wrapper(
     output logic                      RLAST,
     output logic [1:0]                RRESP,
     output logic                      RVALID,
-    input  logic                      RREADY
+    input  logic                      RREADY,
+
+    // ---- M1c: UART input loader (writes BRAM port B) -----------------------
+    input  logic                      uart_rxd,    // async serial in
+    output logic                      data_ready,  // full valid frame stored
+    output logic                      uart_err,    // checksum mismatch
+    output logic                      rx_seen      // any UART byte seen
 );
+
+    // UART loader -> BRAM port B write bus
+    logic        pb_we;
+    logic [13:0] pb_addr;
+    logic [31:0] pb_wdata;
+
+    uart_buffer_loader #(.CLK_HZ(50_000_000), .BAUD(115_200)) u_loader (
+        .clk        (clk),
+        .rst_n      (~rst),          // wrapper reset is active-high
+        .uart_rxd   (uart_rxd),
+        .pb_we      (pb_we),
+        .pb_addr    (pb_addr),
+        .pb_wdata   (pb_wdata),
+        .data_ready (data_ready),
+        .uart_err   (uart_err),
+        .rx_seen    (rx_seen)
+    );
 
     SRAM_wrapper_buf u_buffer_bram (
         .clk       (clk),
@@ -81,7 +104,10 @@ module AXI_BRAM_Buffer_wrapper(
         .RLAST_S   (RLAST),
         .RRESP_S   (RRESP),
         .RVALID_S  (RVALID),
-        .RREADY_S  (RREADY)
+        .RREADY_S  (RREADY),
+        .pb_we     (pb_we),
+        .pb_addr   (pb_addr),
+        .pb_wdata  (pb_wdata)
     );
 
 endmodule

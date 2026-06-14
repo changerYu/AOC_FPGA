@@ -67,7 +67,16 @@ module SRAM_wrapper_buf #(
   output logic [1:0]                RRESP_S,
   output logic                      RLAST_S,
   output logic                      RVALID_S,
-  input  logic                      RREADY_S
+  input  logic                      RREADY_S,
+
+  // ---- Port B: UART loader write port (M1c, same clk domain) -------------
+  // True dual-port BRAM: port A above = AXI (read for DMA buffer->GLB), port B
+  // here = UART loader writes full 32-bit words into the SAME mem[] array, so
+  // the data lives in BRAM and survives a CPU reset (reset-as-trigger). No byte
+  // strobe: each completed UART word writes all 4 bytes.
+  input  logic                      pb_we,
+  input  logic [13:0]               pb_addr,
+  input  logic [31:0]               pb_wdata
 );
 
   localparam int ADDR_WORD_BITS = 14;
@@ -125,18 +134,24 @@ module SRAM_wrapper_buf #(
       read_address = '0;
   end
 
-  // Single-port synchronous BRAM: write has priority over read. Active-low byte
-  // strobes (ASIC BWEB convention): WSTRB bit 0 writes that byte.
+  // Simple dual-port BRAM (cleanly read-only A / write-only B so Vivado can
+  // infer it -- a byte-write port A mixed with a full-word port B is NOT an
+  // inferrable RAM template).
+  //   Port A (this block): READ only, the AXI read path (DMA buffer -> GLB).
+  //     The buffer is never written via AXI in mode 1 (only the UART port B
+  //     writes it), so mem[] takes no AXI write; the W-channel FSM below still
+  //     completes its handshake but stores nothing (no AXI writes ever occur).
   always @(posedge clk) begin
-    if (WVALID_S && WREADY_S) begin
-      for (int b = 0; b < 4; b++) begin
-        if (!WSTRB_S[b]) begin
-          mem[w_word_q][8*b +: 8] <= WDATA_S[8*b +: 8];
-        end
-      end
-    end
-    else if (read_this_cycle) begin
+    if (read_this_cycle) begin
       DO <= mem[read_address];
+    end
+  end
+
+  // Port B: UART loader write -- full 32-bit words. Data lives in this BRAM and
+  // survives a CPU reset (reset-as-trigger). This is the ONLY writer of mem[].
+  always @(posedge clk) begin
+    if (pb_we) begin
+      mem[pb_addr] <= pb_wdata;
     end
   end
 
