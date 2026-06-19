@@ -7,10 +7,19 @@
 #define WDT_BASE_ADDR       0x10010000
 #define DMA_BASE_ADDR       0x10020000
 #define EPU_START_ADDR      0x00060000
+// M2A: writing the EPU reg region sub-address 0x04 clears the frame-ready
+// interrupt latched by EPU_Wrapper when the UART loader fills the buffer BRAM.
+#define FRAME_CLEAR_ADDR    0x00060004
+// M2A: sub-address 0x08 is the per-run EPU soft reset (bit0). The EPU only runs
+// clean once after a hard reset; pulse this before each EPU_start so every
+// classification gets a freshly re-initialized EPU (GLB BRAM contents survive).
+#define EPU_SRESET_ADDR     0x00060008
 
-// Mode-1 (M1a): per-iteration the CPU moves the ECG input from the FPGA buffer
-// (AXI slave S5 @ 0x20000000) into the EPU GLB input region, then starts the
-// EPU. boot.c stages the input into the buffer (later this is the UART RX job).
+// The CPU moves the ECG input from the FPGA buffer (AXI slave S5 @ 0x20000000)
+// into the EPU GLB input region, then starts the EPU. In M2A the buffer is fed
+// continuously by the UART loader; each completed frame raises a frame-ready
+// interrupt and the CPU classifies it, then the hardware sends one UART ACK to
+// the ESP32 (on EPU done) so the next frame may be sent. No button / reset.
 #define FPGA_BUFFER_BASE    0x20000000
 
 #define MSTATUS_VAL         0x1808
@@ -36,8 +45,10 @@ typedef struct {
 extern unsigned int __input_glb_dst;
 extern unsigned int __input_size_bytes;
 
-volatile uint32_t *WDT_addr  = (volatile uint32_t *)WDT_BASE_ADDR;
-volatile uint32_t *EPU_start = (volatile uint32_t *)EPU_START_ADDR;
+volatile uint32_t *WDT_addr    = (volatile uint32_t *)WDT_BASE_ADDR;
+volatile uint32_t *EPU_start   = (volatile uint32_t *)EPU_START_ADDR;
+volatile uint32_t *FRAME_CLEAR = (volatile uint32_t *)FRAME_CLEAR_ADDR;
+volatile uint32_t *EPU_SRESET  = (volatile uint32_t *)EPU_SRESET_ADDR;
 
 void timer_interrupt_handler(void) {
   asm volatile("csrci mstatus, 0x8"); // clear MIE of mstatus
@@ -48,13 +59,15 @@ void timer_interrupt_handler(void) {
 void external_interrupt_handler(void) {
   asm volatile("csrci mstatus, 0x8"); // clear MIE of mstatus
 
-  // Disable DMA on its completion interrupt (used both for the boot preload and
-  // for the mode-1 buffer->GLB transfer below).
-  DMAEN_REG = 0;
-
-  // Deassert EPU start once the EPU done interrupt arrives. Harmless on the DMA
-  // completion interrupt because EPU has not been started yet.
-  EPU_start[0] = 0;
+  // The CPU external interrupt is the OR of three level sources: the DMA
+  // completion, the EPU done, and the M2A frame-ready latch. They fire in a
+  // deterministic order in the loop below, so the handler just clears all
+  // three every time -- clearing an inactive source is harmless. Clearing the
+  // frame-ready latch here (rather than in main) is essential: a level that is
+  // still asserted on return from the trap would re-trap forever.
+  DMAEN_REG    = 0;   // clear DMA completion
+  EPU_start[0] = 0;   // clear EPU done (cpu_response)
+  FRAME_CLEAR[0] = 0; // clear frame-ready latch (any write)
 }
 
 void trap_handler(void) {
@@ -74,26 +87,41 @@ int main(void) {
   asm volatile("csrw mstatus, %0" :: "r"(MSTATUS_VAL));
   asm volatile("csrw mie, %0"     :: "r"(MIE_VAL));
 
-  // --- Mode-1 step: move the input from the FPGA buffer into the EPU GLB. ---
-  // This is the per-sample data move that, in the full mode-1 flow, runs on a
-  // trigger (button / UART data-ready). For M1a it runs once automatically so
-  // the new firmware data path can be validated against the golden sample.
-  DESC_M->src  = FPGA_BUFFER_BASE;                 // 0x20000000
-  DESC_M->dst  = (uint32_t)&__input_glb_dst;       // 0x00030000
-  DESC_M->len  = (uint32_t)&__input_size_bytes;    // 2176 bytes (544 words)
-  DESC_M->next = 0;
-  DESC_M->eoc  = 1;
+  // --- M2A continuous classify loop (strict handshake) ---------------------
+  // 1) sleep until a full UART frame has landed in the buffer BRAM
+  // 2) DMA the buffer -> EPU GLB input, wait for completion
+  // 3) start the EPU, wait for done (the EPU-done pulse sends the ACK in HW)
+  // The ACK lets the ESP32 send the next frame, so step 1 wakes again.
+  //
+  // The descriptor is re-initialized EVERY iteration (not once before the loop):
+  // boot rebuilds its descriptor chain on each reset, and a single-shot main only
+  // ever ran one transfer, so descriptor REUSE across iterations was never tested.
+  // If the DMA engine consumes/updates the descriptor in DMEM, a stale descriptor
+  // would make the next transfer never complete and hang at the DMA wfi. Writing
+  // it fresh each iteration is cheap and removes that failure mode.
+  for (;;) {
+    asm volatile("wfi");                  // wait frame-ready interrupt
 
-  DESC_BASE_REG = DESC_M_ADDR;
-  DMAEN_REG     = 1;
-  asm volatile("wfi");                             // wait DMA completion interrupt
+    DESC_M->src  = FPGA_BUFFER_BASE;              // 0x20000000
+    DESC_M->dst  = (uint32_t)&__input_glb_dst;    // 0x00030000
+    DESC_M->len  = (uint32_t)&__input_size_bytes; // 2176 bytes (544 words)
+    DESC_M->next = 0;
+    DESC_M->eoc  = 1;
 
-  // --- Start the EPU and wait for it to finish. ---
-  EPU_start[0] = 1;
-  asm volatile("wfi");                             // wait EPU done interrupt
+    DESC_BASE_REG = DESC_M_ADDR;
+    DMAEN_REG     = 1;
+    asm volatile("wfi");                  // wait DMA completion interrupt
 
-  // external_interrupt_handler() already deasserted EPU_start; explicit guard.
-  EPU_start[0] = 0;
+    // Soft-reset the EPU before every run so its internal FSMs/counters start
+    // clean (the GLB BRAM weights+input survive). Two writes guarantee the
+    // reset is held low for >1 cycle before being released.
+    EPU_SRESET[0] = 1;                    // assert EPU reset
+    EPU_SRESET[0] = 0;                    // release EPU reset
+
+    EPU_start[0] = 1;
+    asm volatile("wfi");                  // wait EPU done interrupt -> ACK sent
+    EPU_start[0] = 0;                     // explicit guard (handler already did)
+  }
 
   return 0;
 }

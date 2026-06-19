@@ -30,6 +30,9 @@ set_property -dict { PACKAGE_PIN B22 IOSTANDARD LVCMOS12 } [get_ports { rst_btn 
 # ---- M1c: UART RX from ESP32/PC -- JA1 = AB22 (Pmod JA pin 1), 3.3V ---------
 set_property -dict { PACKAGE_PIN AB22 IOSTANDARD LVCMOS33 } [get_ports { uart_rxd }]
 
+# ---- M2A: UART ACK TX to ESP32 -- JA7 = Y21 (Pmod JA pin 7), 3.3V -----------
+set_property -dict { PACKAGE_PIN Y21  IOSTANDARD LVCMOS33 } [get_ports { uart_txd }]
+
 # ---- Display-select slide switches sw[1:0] (LVCMOS12) -----------------------
 set_property -dict { PACKAGE_PIN E22 IOSTANDARD LVCMOS12 } [get_ports { sw[0] }]
 set_property -dict { PACKAGE_PIN F21 IOSTANDARD LVCMOS12 } [get_ports { sw[1] }]

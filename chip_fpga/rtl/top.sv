@@ -19,6 +19,13 @@ output logic data_ready,
 output logic uart_err,
 output logic rx_seen,
 
+//* M2A: UART ACK out to ESP32 (one byte per EPU classification)
+output logic uart_txd,
+
+//* M2A diagnostics: live interrupt levels to the board LEDs (locate loop hang)
+output logic dbg_frame_int,
+output logic dbg_dma_int,
+
 //* FPGA classification output
 // result_class encoding: 0=N, 1=S, 2=V, 3=F, 4=Q
 output logic       result_valid,
@@ -394,7 +401,14 @@ output logic [7:0] result_score
 	logic WTO;
 
 	logic layer_done, intr_epu;
-	
+
+	/////M2A: continuous-loop frame-ready interrupt + UART ACK
+	logic frame_interrupt;          // from EPU_Wrapper, OR'd into CPU interrupt
+	logic [1:0] dr_sync_cpu;        // 2FF sync of data_ready into cpu_clk
+	logic data_ready_cpu;           // synced data_ready (cpu_clk domain)
+	logic intr_epu_q;               // for rising-edge detect of EPU done
+	logic ack_send;                 // 1-cycle pulse: send one ACK byte
+
 	/////DMA
 	logic DMA_interrupt;
 
@@ -763,7 +777,7 @@ CPU_wrapper cpu_instance (
     .RRESP_M1(rresp_m1),
     .RREADY_M1(rready_m1),
 	
-	.interrupt(DMA_interrupt || intr_epu),
+	.interrupt(DMA_interrupt || intr_epu || frame_interrupt),
 	.timer_interrupt(WTO)
 	);
 
@@ -1129,9 +1143,47 @@ EPU_Wrapper EPU_Wrapper(
 	///layer done
     .layer_done     (layer_done),
 	.epu_interrupt	(intr_epu),
+	// M2A: frame-ready interrupt (data_ready synced into cpu_clk here)
+	.data_ready_cpu (data_ready_cpu),
+	.frame_interrupt(frame_interrupt),
 	.result_valid   (result_valid),
 	.result_class   (result_class),
 	.result_score   (result_score)
+);
+
+// ----------------------------------------------------------------------------
+// M2A: synchronize data_ready (dram_clk 50 MHz) into cpu_clk (100 MHz) for the
+// frame-ready interrupt, generate the EPU-done -> ACK send pulse, and transmit
+// one ACK byte to the ESP32 over uart_txd. Strict ping-pong: the ESP32 sends
+// the next frame only after this ACK, which fires when the EPU finishes.
+// ----------------------------------------------------------------------------
+always_ff @(posedge cpu_clk or posedge cpu_rst) begin
+	if (cpu_rst) begin
+		dr_sync_cpu   <= 2'b00;
+		data_ready_cpu<= 1'b0;
+		intr_epu_q    <= 1'b0;
+	end
+	else begin
+		dr_sync_cpu    <= {dr_sync_cpu[0], data_ready};
+		data_ready_cpu <= dr_sync_cpu[1];
+		intr_epu_q     <= intr_epu;
+	end
+end
+
+// One ACK per classification: rising edge of the EPU done interrupt.
+assign ack_send = intr_epu & ~intr_epu_q;
+
+// M2A diagnostics: expose live interrupt levels to the board.
+assign dbg_frame_int = frame_interrupt;
+assign dbg_dma_int   = DMA_interrupt;
+
+uart_tx #(.CLK_HZ(100_000_000), .BAUD(115_200)) u_ack_tx (
+	.clk   (cpu_clk),
+	.rst_n (~cpu_rst),
+	.send  (ack_send),
+	.data  (8'h06),          // ASCII ACK
+	.txd   (uart_txd),
+	.busy  ()
 );
 
 endmodule

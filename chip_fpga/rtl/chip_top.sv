@@ -46,6 +46,7 @@ module chip_top (
     input  wire        rst_btn,   // active-high reset button (BTNC) = trigger+reset
     input  wire [1:0]  sw,        // LED display select
     input  wire        uart_rxd,  // M1c: UART in (JA1/AB22) <- ESP32 GPIO17
+    output wire        uart_txd,  // M2A: UART ACK out (JA7/Y21) -> ESP32 GPIO16
     output wire [7:0]  led
 );
 
@@ -162,6 +163,7 @@ module chip_top (
     wire [2:0]  result_class;
     wire [7:0]  result_score;
     wire        data_ready, uart_err, rx_seen;   // from UART loader (clk50 domain)
+    wire        dbg_frame_int, dbg_dma_int;       // M2A diagnostics (cpu domain)
 
     CHIP u_chip (
         .cpu_clk      (clk100_g),
@@ -176,6 +178,9 @@ module chip_top (
         .data_ready   (data_ready),
         .uart_err     (uart_err),
         .rx_seen      (rx_seen),
+        .uart_txd     (uart_txd),
+        .dbg_frame_int(dbg_frame_int),
+        .dbg_dma_int  (dbg_dma_int),
         .result_valid (result_valid),
         .result_class (result_class),
         .result_score (result_score)
@@ -194,7 +199,13 @@ module chip_top (
     wire rx_seen_s    = rs_sync[1];
 
     // ---------------------------------------------------------------------
-    // Latch the result on the first rising edge of result_valid (cpu domain).
+    // Latch the latest result. M2A runs a continuous classify loop, so the
+    // display must follow EVERY classification, not just the first. result_valid
+    // is cleared by the EPU at each new system_start and re-asserted when the
+    // new logits are ready, so sampling while it is high always shows the most
+    // recent result. (M1c latched only the first edge -- that froze the LEDs in
+    // continuous mode until a CPU reset.) valid_lat stays sticky-1 once any
+    // result has been produced (used only as a "have a result" status bit).
     // ---------------------------------------------------------------------
     reg        valid_lat = 1'b0;
     reg [2:0]  class_lat = 3'd0;
@@ -205,10 +216,50 @@ module chip_top (
             class_lat <= 3'd0;
             score_lat <= 8'd0;
         end
-        else if (result_valid && !valid_lat) begin
+        else if (result_valid) begin
             valid_lat <= 1'b1;
             class_lat <= result_class;
             score_lat <= result_score;
+        end
+    end
+
+    // ---------------------------------------------------------------------
+    // M2A ACK-activity diagnostic: uart_txd idles high and pulses low (start
+    // bit) for every ACK byte the FPGA sends to the ESP32. Toggle a flip-flop on
+    // each uart_txd falling edge so an LED blinks once per ACK -- this shows
+    // whether the FPGA is actually generating ACKs (loop running + EPU done),
+    // independent of whether the ESP32 receives them (wiring).
+    // ---------------------------------------------------------------------
+    reg txd_q = 1'b1;
+    reg ack_tx_toggle = 1'b0;
+    always @(posedge clk100_g) begin
+        txd_q <= uart_txd;
+        if (txd_q && !uart_txd) ack_tx_toggle <= ~ack_tx_toggle;  // falling edge
+    end
+
+    // ---------------------------------------------------------------------
+    // M2A loop-progress diagnostics (sw=11 view). Count UART frames received
+    // (data_ready rising edges) vs EPU classifications completed (result_valid
+    // rising edges). If the loop runs continuously the two counts track; if the
+    // loop hangs after iteration 1, frame_count keeps climbing while class_count
+    // stays at 1. Also expose the live frame/DMA interrupt levels so the hang
+    // location (frame wfi vs DMA wfi) is visible.
+    // ---------------------------------------------------------------------
+    reg dr_q2 = 1'b0, rv_q2 = 1'b0;
+    reg [3:0] frame_count = 4'd0;
+    reg [3:0] class_count = 4'd0;
+    always @(posedge clk100_g) begin
+        if (!rst_done) begin
+            frame_count <= 4'd0;
+            class_count <= 4'd0;
+            dr_q2 <= 1'b0;
+            rv_q2 <= 1'b0;
+        end
+        else begin
+            dr_q2 <= data_ready_s;
+            rv_q2 <= result_valid;
+            if (data_ready_s && !dr_q2) frame_count <= frame_count + 4'd1;
+            if (result_valid  && !rv_q2) class_count <= class_count + 4'd1;
         end
     end
 
@@ -223,11 +274,17 @@ module chip_top (
         case (sw)
             2'b00:   led_r = score_lat;
             2'b01:   led_r = {valid_lat, 4'b0000, class_lat};
-            // M1c UART/status view:
+            // M1c/M2A UART/status view:
             //   LED7=rx_seen LED6=uart_err LED5=data_ready
+            //   LED4=ack_tx (blinks once per ACK byte the FPGA sends)
             //   LED2=locked  LED1=rst_done LED0=valid
-            2'b10:   led_r = {rx_seen_s, uart_err_s, data_ready_s, 2'b00,
-                              locked, rst_done, valid_lat};
+            2'b10:   led_r = {rx_seen_s, uart_err_s, data_ready_s, ack_tx_toggle,
+                              1'b0, locked, rst_done, valid_lat};
+            // M2A loop diagnostics:
+            //   LED7=frame_int(live) LED6=dma_int(live) LED5=result_valid(live)
+            //   LED[3:0]=class_count (EPU classifications done; stays 1 if hung)
+            2'b11:   led_r = {dbg_frame_int, dbg_dma_int, result_valid, 1'b0,
+                              class_count};
             default: led_r = hb[25:18];
         endcase
     end

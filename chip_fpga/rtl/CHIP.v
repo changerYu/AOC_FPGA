@@ -23,6 +23,13 @@ module CHIP(
   output           uart_err,
   output           rx_seen,
 
+  // M2A: UART ACK out to ESP32 (one byte per EPU classification)
+  output           uart_txd,
+
+  // M2A diagnostics: live interrupt levels for the board LEDs
+  output           dbg_frame_int,
+  output           dbg_dma_int,
+
   output           result_valid,
   output [2:0]     result_class,
   output [7:0]     result_score
@@ -41,6 +48,9 @@ top u_TOP(
     .data_ready   (data_ready),
     .uart_err     (uart_err),
     .rx_seen      (rx_seen),
+    .uart_txd     (uart_txd),
+    .dbg_frame_int(dbg_frame_int),
+    .dbg_dma_int  (dbg_dma_int),
     .result_valid (result_valid),
     .result_class (result_class),
     .result_score (result_score)

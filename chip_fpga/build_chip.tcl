@@ -50,6 +50,9 @@ while {[gets $fh line] >= 0} {
     # Skip the original top.sv / CHIP.v -- replaced by M1c overlays (UART plumbing).
     if {[string match "*/top.sv" $abs]}  { continue }
     if {[string match "*/CHIP.v" $abs]}  { continue }
+    # Skip the original EPU_Wrapper.sv -- replaced by the M2A overlay (frame-ready
+    # interrupt for the continuous classify loop).
+    if {[string match "*/EPU_Wrapper.sv" $abs]} { continue }
     lappend rtl $abs
 }
 close $fh
@@ -64,6 +67,8 @@ add_files -fileset sources_1 [list \
     $proj_dir/rtl/AXI_BRAM_Buffer_wrapper.sv \
     $proj_dir/rtl/uart_rx.sv \
     $proj_dir/rtl/uart_buffer_loader.sv \
+    $proj_dir/rtl/uart_tx.sv \
+    $proj_dir/rtl/EPU_Wrapper.sv \
     $proj_dir/rtl/top.sv \
     $proj_dir/rtl/CHIP.v \
     $proj_dir/rtl/chip_top.sv ]
